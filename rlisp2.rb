@@ -8,7 +8,11 @@ class Env < Hash
     def [](name) super(name)||@outer[name] end
     def set(name,val) key?(name) ? store(name,val): @outer.set(name,val) end
 end
-
+class Procedure
+    def initialize(parms,exp,env)
+        @parms,@exp,@env=parms,exp,env
+    end
+end
 def add_globals(env)
     #添加操作符和运算符
     ops=[:+,:-,:*,:/, :>, :<, :>=, :<=, :==]
@@ -53,7 +57,18 @@ def eval(x,env)
         
     end
 end
+def parseport(inport)
+    if inport.is_a? String then inport=InPort(StringIO.new(inport)) end
+    return expand(read(inport,toplevel=true))
+end
 
+class InPort
+    def initialize(file)
+        @file=file;
+        @line=''
+    end
+    def next_token
+    end
 def atom(s)
     #还没看明白
     return "[" if s=='('  
