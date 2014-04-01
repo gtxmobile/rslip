@@ -1,3 +1,4 @@
+require 'cmath'
 class Env < Hash
     def initialize(keys=[],vals=[],outer=nil)
         @outer=outer
@@ -13,6 +14,7 @@ class Procedure
         @parms,@exp,@env=parms,exp,env
     end
 end
+
 def add_globals(env)
     #添加操作符和运算符
     ops=[:+,:-,:*,:/, :>, :<, :>=, :<=, :==]
@@ -20,11 +22,22 @@ def add_globals(env)
         env[op]=lambda{|a,b| a.method(op).call(b)}
     }
     Math.methods(false).each{|k| env[k]=Math.method(k)}
-    env.update({:length => lambda{|x| x.length}, :cons => lambda{|x,y| [x]+y},:car => lambda{|x| x[0]},:cdr => lambda{|x| x[1..-1]}, :append => lambda{|x,y| x+y},
+    CMath.methods(false).each{|k| env[k]=CMath.method(k)}
+    env.update({:length => lambda{|x| x.length}, :cons => method(:cons),:car => lambda{|x| x[0]},:cdr => lambda{|x| x[1..-1]}, :append => lambda{|x,y| x+y},
   :list => lambda{|*xs| xs}, :list? => lambda{|x| x.is_a? Array}, :null? => lambda{|x| x==nil},
-  :symbol? => lambda{|x| x.is_a? Symbol}, :not => lambda{|x| !x}, :display => lambda{|x| p x}})
+  :symbol? => lambda{|x| x.is_a? Symbol}, :not => lambda{|x| !x}, :display1 => lambda{|x| p x},'boolean?'=>lambda{|x| !!x==x},'pair?'=>method(:is_pair),'port?'=>lambda{|x| x.is_a? File},'apply'=>lambda{|p,l| p.call(*l)},'eval'=>lambda{|x| eval(expand(x))},'load'=>lambda{|fn| load(fn)},'open-input-file'=>method(:open),'close-input-port'=>lambda{|p| p.file.close},'open-output-file'=>lambda{|f| opne(f,'w')},'close-output-port'=>lambda {|p| p.close()},
+     'eof-object?'=>lambda {|x| x.eof}, 'read-char'=>method(:readchar),
+     'read'=>method(:read), 'write'=>lambda{|x| port=STDOUT.write(to_string(x))},
+     'display'=>lambda{|x| port=$stdout.write((x.is_a?String)? x : x.to_s)}})
 
 end
+def read
+end
+def readchar
+end
+def is_pair(x) x!=[] and x.is_a? Array end
+def cons(x,y) [x]+y end
+
 
 def eval(x,env)
     return env[x] if x.is_a? Symbol     #表示是个变量
@@ -62,6 +75,51 @@ def parseport(inport)
     return expand(read(inport,toplevel=true))
 end
 
+def expand(x,toplevel=true)
+    assert(x,x!=[])
+    return x if !x.is_a? Array
+    case x[0]
+    when :quote         #(quote exp)
+        assert(x,x.length==2)
+        reutrn x
+    when :if            #(if test conseq alt) 
+        x+=[nil] if x.length==3
+        assert(x,x.length==4)
+        return map(expand,x)
+    when :set!          #(set! var exp) set表示了变量已经存在的情况
+        assert(x,x.length==3)
+        var=x[1]
+        assert(x,var.is_a?Symbol)
+        [:set,var,expand(x[2])]    
+    when :define        #(define var exp)
+        _,var,exp=x
+        env[var]=eval(exp,env)
+    when :lambda        #(lambda (var*) exp)
+        _,vars,exp=x
+        #创建一个过程
+        Proc.new{|*args| eval(exp,Env.new(vars,args,env))}
+    when :begin         #(begin exp*)
+        val=nil
+        x[1..-1].each{|exp|
+            val=eval(exp,env)
+        }
+        return val
+    else                #(proc exp*)
+        exps=x.map{|exp| eval(exp,env)}
+        exps[0].call(*exps[1..-1])
+        
+    end
+
+end
+def assert(x, predicate, msg="wrong length")
+    "Signal a syntax error if predicate is false."
+    if not predicate
+        raise SyntaxError(x.to_s+': '+msg)
+    end
+end
+def loadfile(fn)
+    reql(nil,InPort.new(open(fn)),nil)
+end
 class InPort
     def initialize(file)
         @file=file;
@@ -69,6 +127,7 @@ class InPort
     end
     def next_token
     end
+end
 def atom(s)
     #还没看明白
     return "[" if s=='('  
@@ -98,6 +157,6 @@ env=Env.new
 add_globals(env)
 #p env
 p (eval(parse("(log 2)"),env))
-#keys=Math.methods(false)
-#p (keys.zip(keys.map{|k| Math.method(k)}))
+#keys=CMath.methods(false)
+#p (keys.zip(keys.map{|k| CMath.method(k)}))
 #p (eval(parse(src),env))
