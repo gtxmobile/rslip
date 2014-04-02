@@ -7,7 +7,9 @@ class Env < Hash
         #dup.update(keys.zip(vals))
     end
     def [](name) super(name)||@outer[name] end
-    def set(name,val) key?(name) ? store(name,val): @outer.set(name,val) end
+    def set(name,val) 
+        key?(name) ? store(name,val): @outer.set(name,val) 
+    end
 end
 class Procedure
     def initialize(parms,exp,env)
@@ -32,8 +34,28 @@ def add_globals(env)
 
 end
 def read
+    def read_ahead(token)
+        if '('==token
+            l=[]
+            while true
+                token=inport.next_token()
+                if ')'==token
+                    l
+                else
+                    l.append(read_ahead(token))
+                end
+            end
+        elsif ')'==token
+            raise SyntaxError('unexpected )')
+
+
 end
-def readchar
+def readchar(inport)
+    if inport.line!=''
+        ch,inport.line=inport.line[0],inport.line[1..-1]
+        ch
+    else
+        inport.file.read(1) or :eof_object 
 end
 def is_pair(x) x!=[] and x.is_a? Array end
 def cons(x,y) [x]+y end
@@ -75,59 +97,136 @@ def parseport(inport)
     return expand(read(inport,toplevel=true))
 end
 
-def expand(x,toplevel=true)
-    assert(x,x!=[])
+#expand相对于eval做了参数检查的功能
+def expand(x,env,toplevel=true)
+    myassert(x,x!=[])
     return x if !x.is_a? Array
     case x[0]
     when :quote         #(quote exp)
-        assert(x,x.length==2)
-        reutrn x
+        myassert(x,x.length==2)
+        x[1..-1]
     when :if            #(if test conseq alt) 
         x+=[nil] if x.length==3
-        assert(x,x.length==4)
-        return map(expand,x)
+        myassert(x,x.length==4)
+        _,test,conseq,alt=x
+        expand(expand(test,env) ? conseq : alt,env)
+        #return map(expand,x)
     when :set!          #(set! var exp) set表示了变量已经存在的情况
-        assert(x,x.length==3)
-        var=x[1]
-        assert(x,var.is_a?Symbol)
-        [:set,var,expand(x[2])]    
-    when :define        #(define var exp)
+        myassert(x,x.length==3)
         _,var,exp=x
-        env[var]=eval(exp,env)
+        myassert(x,var.is_a?(Symbol))
+        env.set(var,eval(exp,env))
+        #[:set,var,expand(x[2])]    
+    when :define        #(define var exp)
+    when :definemarco
+        myassert(x,x.lenght>=3)
+        deffun,var,body=x
+        if var.is_a? Array and var    # (define (f args) body)
+            f,args=var               #  => (define f (lambda (args) body))
+            expand([deffun,f,[:lambda,args]+body])
+        else
+            myassert(x,x.length==3)       # (define non-var/list exp) => Error
+            myassert(x,var.is_a?(Symbol), "can define only a symbol")
+            exp=expand(x[2])
+            if deffun==:definemacro
+                myassert(x,toplevel,"define-macro only allowed at top level")
+                porc=expand(exp)
+                myassert(x,porc.is_a?(Proc),"macro must be a procedure")
+                macro_table[v]=porc
+                return nil
+            end
+            env[var]=eval(exp,env)
+            return [:define,var,exp]
+        end
     when :lambda        #(lambda (var*) exp)
-        _,vars,exp=x
+        myassert(x,x.length(x)>=3)
+        _,vars,body=x
+        myassert(x,((vars.is_a?(Array) and (vars.map{|v| v.is_a?(Symbol)}).all?) or vars.is_a?(Symbol)),'illegal lambda args list')
         #创建一个过程
-        Proc.new{|*args| eval(exp,Env.new(vars,args,env))}
-    when :begin         #(begin exp*)
-        val=nil
-        x[1..-1].each{|exp|
-            val=eval(exp,env)
-        }
-        return val
-    else                #(proc exp*)
-        exps=x.map{|exp| eval(exp,env)}
-        exps[0].call(*exps[1..-1])
         
+        if body.length == 1 
+        exp=body[0]    
+        else 
+            [:begin] + body
+        end
+        proc{|*args| expand(exp,Env.new(vars,args,env))}
+        #Proc.new{|*args| eval(exp,Env.new(vars,args,env))}
+    when :begin         #(begin exp*)
+        if x.length==1
+            return nil
+        else
+            x[1..-1].map{|exp| val=expand(exp,env,toplevel)}
+        end
+    when :quasiquote
+        myassert(x,x.length==2)
+        expand_quasiquote(x[1])
+    else                #(proc exp*)
+        if x[0].is_a? Symbol and x[0].in? macro_table
+            expand(macro_table[x[0]].call(*x[1..-1]),env,toplevel)
+        else
+        exps=x.map{|exp| expand(exp,env)}
+        exps[0].call(*exps[1..-1])
+        end
     end
 
 end
-def assert(x, predicate, msg="wrong length")
-    "Signal a syntax error if predicate is false."
+
+def expand_quasiquote(x)
+    if not is_pair(x)
+        [:quote,x]
+    end
+    myassert(x,x[0] != :unquotesplicing,"can't splice here")
+    if x[0] ==:unquote
+        myassert(x,x.length==2)
+        x[1]
+    elsif is_pair(x[0]) and x[0][0]==:unquotesplicing
+        myassert(x[0],x[0].length==2)
+        [:append,x[0][1],expand_quasiquote(x[1..-1])]
+    else
+        [:cons,expand_quasiquote(x[0]),expand_quasiquote(x[1..-1])]
+    end
+end
+def let(*args)
+    args=Array.new(args)
+    x=cons(:let,args)
+    myassert(x,args.length>1)
+    bindings,body=args[0],args[1..-1]
+    myassert(x,bindings.map{|b| b.is_a?Array and b.length==2 and b[0].is_a?Symbol}.all?)
+    vars,vals=zip(*bindings)
+    [[:lambda,[vars]]+(body.map &:expand)]+vals.map{|v| expand(v)}
+end
+    
+    
+def myassert(x, predicate, msg="wrong length")
+    #"""Signal a syntax error if predicate is false."""
     if not predicate
         raise SyntaxError(x.to_s+': '+msg)
     end
 end
-def loadfile(fn)
-    reql(nil,InPort.new(open(fn)),nil)
-end
+
 class InPort
     def initialize(file)
         @file=file;
         @line=''
     end
+    @@tokenizer=%r{\s*(,@|[('`,)]|"(?:[\].|[^\"])*"|;.*|[^\s('"`,;)]*)(.*)}
     def next_token
+        while true
+            @line=@file.readline if @line==''
+            :eof_object if line==''
+            token,@line=re.match(@@tokenizer,@line).groups
+            if token!='' and not token[0]==';'
+                token
+            end
+        end
     end
 end
+
+def loadfile(fn)
+    reql(nil,InPort.new(open(fn)),nil)
+end
+
+
 def atom(s)
     #还没看明白
     return "[" if s=='('  
@@ -143,6 +242,8 @@ def parse(s)
     Kernel.eval(toks.map{|s| atom(s)}.join(' ').gsub(' ]',']').gsub('[ ','[').gsub(/([^\[]) /,'\1, '))
     
 end
+
+
 src =<<CODE  
 (begin  
  (define fact (lambda (n)   
@@ -153,10 +254,12 @@ src =<<CODE
 CODE
 keys = [1, 2, 3]
 vals = ["a", "b", "c"]
-env=Env.new
-add_globals(env)
+macro_table={:let=>method(:let)}
+global_env=Env.new
+
+add_globals(global_env)
 #p env
-p (eval(parse("(log 2)"),env))
+p (eval(parse("(log 2)"),global_env))
 #keys=CMath.methods(false)
 #p (keys.zip(keys.map{|k| CMath.method(k)}))
 #p (eval(parse(src),env))
